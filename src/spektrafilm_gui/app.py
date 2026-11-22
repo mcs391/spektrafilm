@@ -305,6 +305,8 @@ def create_app() -> GuiApp:
 def main():
     napari = import_module('napari')
     app = create_app()
+    from spektrafilm_gui.library_workspace import install_library_workspace
+    install_library_workspace(app.main_window, app.controller, app.widgets)
     show_viewer_window(app.viewer)
     napari.run()
 

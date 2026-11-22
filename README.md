@@ -9,6 +9,59 @@
 
 # Spectral film simulations of analog photography
 
+## 中文图库开发版（非官方 Fork）
+
+本分支基于 [Andrea Volpato 的 spektrafilm](https://github.com/andreavolpato/spektrafilm)
+增加同窗口的“图库 / 调色”页面：文件及文件夹导入、后台缩略图、
+评分、颜色标签、挑选/拒绝、关键词、搜索筛选、200 张分页及失联文件重新定位。
+导入仅引用原文件；从图库移除只删除目录记录及相关标记、参数，不删除原图。
+调色参数和旋转按照片自动保存（每 2 秒、切换照片和关闭前），显示设置仍为全局设置。
+导出只允许使用新文件名，不覆盖原图或已有成片。
+
+首次安装（需要 Git、[uv](https://docs.astral.sh/uv/) 和 Python 3.13）：
+
+```bash
+git clone --branch codex/chinese-photo-library https://github.com/mcs391/spektrafilm.git
+cd spektrafilm
+uv venv --python 3.13
+uv pip install -e .
+SPEKTRAFILM_LANG=zh .venv/bin/spektrafilm
+```
+
+已安装后，在项目目录中启动：
+
+```bash
+SPEKTRAFILM_LANG=zh .venv/bin/spektrafilm
+```
+
+数据库默认保存在 macOS 的 `~/Library/Application Support/spektrafilm/library.sqlite3`。
+可用 `SPEKTRAFILM_LIBRARY=/absolute/path/library.sqlite3` 指定独立图库。
+数据库不包含原照片；备份时须分别备份照片和图库，关闭程序后再复制数据库文件。
+以上命令将依赖安装到本目录的 `.venv`，不会创建 `/Applications` 中的应用。
+
+调色页中文显示层复用社区 [PR #69](https://github.com/andreavolpato/spektrafilm/pull/69)
+（Orieileen，提交 `37fdfdda75b222292b71adc5a335b33c2b2a1954`），尚非上游正式发布的中文版。
+胶片型号及色彩空间保留原名。图库界面为中文。
+
+第一版边界：未包含云同步、人脸识别、智能集合、完整编辑历史或批量调色。
+JPEG/PNG 首次打开默认按 sRGB 解释，其他编码需在输入设置中指定；缩略图仅用于选片。
+RAW 优先读取嵌入预览，没有嵌入预览时尝试缩小解码；EXR 等 Qt 无法生成缩略图的
+格式显示占位提示，仍可进入现有调色引擎。计算中暂不允许切换照片，以免异步结果错配。
+
+开发验证：
+
+```bash
+uv pip install pytest
+QT_QPA_PLATFORM=offscreen .venv/bin/python -m pytest tests/gui tests/test_catalog.py -q
+# macOS 原生 OpenGL：实际导入、胶片计算、导出及界面渲染
+QT_QPA_PLATFORM=cocoa .venv/bin/python -m pytest tests/gui/test_library_integration.py -q
+```
+
+已在 macOS 验证：常规测试 171 项通过、1 项原生图形测试在 offscreen 下跳过；
+该原生测试使用生成的 PNG 单独运行通过。真实相机 RAW 和大规模图库仍待验证。
+新增代码沿用项目 GPLv3；原有配置文件和 LUT 的许可见
+[SPEKTRAFILM_LICENSE.txt](SPEKTRAFILM_LICENSE.txt)，保留原作者署名及许可文件。
+
 An exploration of how to make good use of spectroscopic data from manufacturer datasheets in an end-to-end, physically based model with spectral calculations, with the goal of turning that data into convincing film, print, and scan renderings that can be explored interactively.
 
 Here are some useful links and spin-off projects:
