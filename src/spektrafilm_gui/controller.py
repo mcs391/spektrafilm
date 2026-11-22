@@ -24,6 +24,7 @@ from spektrafilm_gui.persistence import (
     save_gui_state_to_path,
 )
 from spektrafilm_gui.state import PROJECT_DEFAULT_GUI_STATE, digest_after_selection, gui_state_from_params
+from spektrafilm_gui.i18n import tr
 from spektrafilm_gui.napari_layout import dialog_parent, reset_viewer_camera, set_canvas_background, set_status
 from spektrafilm_gui.params_mapper import build_params_from_state
 from spektrafilm_gui.state_bridge import apply_gui_state, collect_gui_state
@@ -152,9 +153,11 @@ class GuiController:
         self._next_runtime_digest_applies_stock_specifics = True
         self._current_input_image: np.ndarray | None = None
         self._current_input_path: str | None = None
+        self.input_rotation_quarters = 0
         self._current_preview_image: np.ndarray | None = None
         self._auto_preview_scheduled = False
         self._pending_auto_preview = False
+        self._preview_suspended = False
         self._active_simulation_reports_status = True
 
     def show_startup_placeholder(self) -> None:
@@ -177,15 +180,17 @@ class GuiController:
         )
         self._home_input_stack()
 
-    def load_input_image(self, path: str) -> None:
+    def load_input_image(self, path: str) -> bool:
         image = load_image_oiio(path)[..., :3]
         self._current_input_path = path
         self._set_or_add_input_stack(image)
+        self.input_rotation_quarters = 0
         self._request_auto_preview_if_enabled()
+        return True
 
-    def load_raw_image(self, path: str) -> None:
+    def load_raw_image(self, path: str) -> bool:
         gui_state = collect_gui_state(widgets=self._widgets)
-        set_status(self._viewer, "Loading raw...", timeout_ms=0)
+        set_status(self._viewer, tr("Loading raw..."), timeout_ms=0)
         lens_info: dict[str, str] = {}
         try:
             image = load_and_process_raw_file(
@@ -199,24 +204,26 @@ class GuiController:
                 lens_info_out=lens_info,
             )
         except (OSError, ValueError) as exc:
-            QMessageBox.critical(dialog_parent(self._viewer), 'Load raw', f'Failed to load RAW image.\n\n{exc}')
-            set_status(self._viewer, 'Load raw failed')
-            return
+            QMessageBox.critical(dialog_parent(self._viewer), tr('Load raw'), f'{tr("Failed to load RAW image.")}\n\n{exc}')
+            set_status(self._viewer, tr('Load raw failed'))
+            return False
 
         self._current_input_path = path
         self._set_or_add_input_stack(image)
+        self.input_rotation_quarters = 0
 
         lens_summary = lens_info.get('summary')
         if lens_summary:
             set_status(
                 self._viewer,
-                f"Loaded raw and applied lens correction: {lens_summary}",
+                f'{tr("Loaded raw and applied lens correction")}: {lens_summary}',
             )
         elif gui_state.gui_only.load_raw.lens_correction:
-            set_status(self._viewer, "Loaded raw, lens correction not applied")
+            set_status(self._viewer, tr("Loaded raw, lens correction not applied"))
         else:
-            set_status(self._viewer, "Loaded raw")
+            set_status(self._viewer, tr("Loaded raw"))
         self._request_auto_preview_if_enabled()
+        return True
 
     def refresh_preview_cache(self, *_args) -> None:
         input_image = self._current_input_image
@@ -245,6 +252,7 @@ class GuiController:
             home_input_stack=True,
             hide_output=True,
         )
+        self.input_rotation_quarters = (self.input_rotation_quarters + quarter_turns) % 4
         self._request_auto_preview_if_enabled()
 
     def apply_profile_defaults(self, _selected_value: str) -> None:
@@ -285,6 +293,8 @@ class GuiController:
         self._start_simulation(source_layer_name=INPUT_LAYER_NAME, mode_label='Scan')
 
     def request_auto_preview(self, *_args) -> None:
+        if self._preview_suspended:
+            return
         if self._auto_preview_scheduled:
             return
         self._auto_preview_scheduled = True
@@ -315,13 +325,13 @@ class GuiController:
 
         self._set_display_transform_checked(False)
         if report_status:
-            set_status(self._viewer, 'Display transform unavailable: no display profile detected, disabled')
+            set_status(self._viewer, tr('Display transform unavailable: no display profile detected, disabled'))
         return False
 
     def save_output_layer(self) -> None:
         output_layer = self._output_layer()
         if output_layer is None:
-            QMessageBox.warning(dialog_parent(self._viewer), 'Save output', 'Run a simulation before saving the output layer.')
+            QMessageBox.warning(dialog_parent(self._viewer), tr('Save output'), tr('Run a simulation before saving the output layer.'))
             return
 
         if self._current_input_path is not None:
@@ -331,11 +341,17 @@ class GuiController:
 
         filepath, _ = _DirMemoryDialog('save_output').get_save_file_name(
             dialog_parent(self._viewer),
-            'Save output image',
+            tr('Save output image'),
             default_name,
             'Images (*.jpg *.jpeg *.png *.tif *.tiff *.exr)',
         )
         if not filepath:
+            return
+
+        destination = Path(filepath).resolve()
+        source = Path(self._current_input_path).resolve() if self._current_input_path else None
+        if destination == source or destination.exists() or destination.is_symlink():
+            QMessageBox.warning(dialog_parent(self._viewer), '保护已有文件', '导出只写入新文件。请使用新的文件名，避免覆盖原图或已有成片。')
             return
 
         gui_state = collect_gui_state(widgets=self._widgets)
@@ -381,7 +397,7 @@ class GuiController:
                 cctf_encoding=saving_cctf_encoding,
             )
         except (OSError, ValueError) as exc:
-            QMessageBox.critical(dialog_parent(self._viewer), 'Save output', f'Failed to save output image.\n\n{exc}')
+            QMessageBox.critical(dialog_parent(self._viewer), tr('Save output'), f'{tr("Failed to save output image.")}\n\n{exc}')
             return
 
         metadata_write_error = None
@@ -398,10 +414,10 @@ class GuiController:
         if metadata_write_error is not None:
             set_status(
                 self._viewer,
-                f"Saved output image to {filepath}, but failed to copy metadata: {metadata_write_error}",
+                f'{tr("Saved output image to")} {filepath}, {tr("but failed to copy metadata")}: {metadata_write_error}',
             )
         else:
-            set_status(self._viewer, f"Saved output image to {filepath}")
+            set_status(self._viewer, f'{tr("Saved output image to")} {filepath}')
 
     def save_current_as_default(self) -> None:
         persistence_actions.save_current_as_default(
@@ -535,6 +551,9 @@ class GuiController:
 
     def _run_scheduled_auto_preview(self) -> None:
         self._auto_preview_scheduled = False
+        if self._preview_suspended:
+            self._pending_auto_preview = False
+            return
         if not self._auto_preview_enabled() or self._current_preview_image is None:
             self._pending_auto_preview = False
             return
@@ -627,10 +646,7 @@ class GuiController:
         )
 
     def _process_image_with_runtime(self, image_data: np.ndarray, params) -> np.ndarray:
-        apply_stocks_specifics = (
-            self._runtime_simulator is None
-            or self._next_runtime_digest_applies_stock_specifics
-        )
+        apply_stocks_specifics = self._next_runtime_digest_applies_stock_specifics
         digested_params = digest_params(
             params,
             apply_stocks_specifics=apply_stocks_specifics,
@@ -687,13 +703,15 @@ class GuiController:
         return params
 
     def _start_simulation(self, *, source_layer_name: str, mode_label: str, report_status: bool = True) -> None:
+        if self._preview_suspended:
+            return
         if self._active_simulation_worker is not None:
-            set_status(self._viewer, 'Simulation already running')
+            set_status(self._viewer, tr('Simulation already running'))
             return
 
         image_data = self._simulation_input_image(source_layer_name=source_layer_name)
         if image_data is None:
-            QMessageBox.warning(dialog_parent(self._viewer), 'Run simulation', 'Load an input image before running the simulation.')
+            QMessageBox.warning(dialog_parent(self._viewer), tr('Run simulation'), tr('Load an input image before running the simulation.'))
             return
 
         state = collect_gui_state(widgets=self._widgets)
@@ -720,7 +738,7 @@ class GuiController:
         self._active_simulation_reports_status = report_status
         self._set_simulation_controls_enabled(False)
         if report_status:
-            set_status(self._viewer, f'Computing {mode_label.lower()}...', timeout_ms=0)
+            set_status(self._viewer, tr(f'Computing {mode_label.lower()}...'), timeout_ms=0)
         self._thread_pool.start(worker)
 
     def _on_simulation_finished(self, result: SimulationResult) -> None:
@@ -737,7 +755,7 @@ class GuiController:
             use_display_transform=result.use_display_transform,
         )
         if report_status:
-            set_status(self._viewer, f'{result.mode_label} completed. {result.status_message}')
+            set_status(self._viewer, f'{tr(f"{result.mode_label} completed.")} {result.status_message}')
         self._replay_pending_auto_preview()
 
     def _on_simulation_failed(self, message: str) -> None:
@@ -746,8 +764,8 @@ class GuiController:
         self._active_simulation_label = None
         self._active_simulation_reports_status = True
         self._set_simulation_controls_enabled(True)
-        QMessageBox.critical(dialog_parent(self._viewer), 'Run simulation', f'Simulation failed.\n\n{message}')
-        set_status(self._viewer, f'{mode_label} failed')
+        QMessageBox.critical(dialog_parent(self._viewer), tr('Run simulation'), f'{tr("Simulation failed.")}\n\n{message}')
+        set_status(self._viewer, tr(f'{mode_label} failed'))
         self._replay_pending_auto_preview()
 
     def _set_simulation_controls_enabled(self, enabled: bool) -> None:
@@ -763,7 +781,7 @@ class GuiController:
     def _run_simulation(self, *, source_layer_name: str) -> None:
         image_data = self._simulation_input_image(source_layer_name=source_layer_name)
         if image_data is None:
-            QMessageBox.warning(dialog_parent(self._viewer), 'Run simulation', 'Load an input image before running the simulation.')
+            QMessageBox.warning(dialog_parent(self._viewer), tr('Run simulation'), tr('Load an input image before running the simulation.'))
             return
 
         state = collect_gui_state(widgets=self._widgets)
